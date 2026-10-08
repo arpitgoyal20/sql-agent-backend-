@@ -168,6 +168,15 @@ def test_cors(client):
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
     )
     assert "access-control-allow-origin" not in bad.headers
+    # The deployed frontend is allowed in code, whatever ALLOWED_ORIGINS says.
+    vercel = client.options(
+        "/api/chat",
+        headers={
+            "Origin": "https://sql-agent-frontend-delta.vercel.app",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert vercel.headers["access-control-allow-origin"] == "https://sql-agent-frontend-delta.vercel.app"
 
 
 def test_schema_columns_have_pk_and_nullable(client):

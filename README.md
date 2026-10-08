@@ -11,8 +11,8 @@ and what reaches the user.
 
 | | |
 |---|---|
-| Frontend | https://YOUR-FRONTEND.vercel.app (repo: [sql-agent-frontend](https://github.com/arpitgoyal20/sql-agent-frontend)) |
-| Backend | https://YOUR-BACKEND.onrender.com ([`/api/health`](https://YOUR-BACKEND.onrender.com/api/health)) |
+| Frontend | https://sql-agent-frontend-delta.vercel.app (repo: [sql-agent-frontend](https://github.com/arpitgoyal20/sql-agent-frontend)) |
+| Backend | https://sql-agent-backend-rg9t.onrender.com ([`/api/health`](https://sql-agent-backend-rg9t.onrender.com/api/health)) |
 | Login | none needed |
 
 ## Contents
@@ -158,7 +158,7 @@ docker run -p 8000:8000 --env-file .env sql-agent-backend
 | `LLM_MODEL` | `gemini-3.5-flash-lite` | model name |
 | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | — | Gemini key |
 | `LLM_THINKING_BUDGET` | unset | optional cap on Gemini thinking tokens |
-| `ALLOWED_ORIGINS` | `http://localhost:5173` | comma-separated CORS origins (any `localhost` port is also allowed for development) |
+| `ALLOWED_ORIGINS` | empty | optional extra CORS origins, comma-separated. The deployed frontend (`https://sql-agent-frontend-delta.vercel.app`) and `localhost` on any port are allowed in code ([`app/config.py`](app/config.py)) |
 | `CHECKPOINT_DB` | `data/checkpoints.db` | LangGraph checkpoints + threads index |
 | `SAMPLE_DB` | `data/sample.db` | the read-only database |
 | `RATE_LIMIT` | `20/minute` | per-IP limit on `POST /api/chat` and `/api/execute` |
@@ -253,7 +253,7 @@ keeps them. The expected SQL has since been corrected to `LEFT JOIN`.
 Render → New Web Service → this repo → Runtime **Docker**.
 
 - Health check path: `/api/health`
-- Environment: `GOOGLE_API_KEY`, `ALLOWED_ORIGINS=https://YOUR-FRONTEND.vercel.app`
+- Environment: `GOOGLE_API_KEY`, `LLM_MODEL=gemini-3.5-flash-lite` (CORS for the Vercel frontend is set in code)
 - `sample.db` is baked into the image; `checkpoints.db` is created at runtime.
 
 ## Assumptions

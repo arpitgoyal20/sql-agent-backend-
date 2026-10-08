@@ -9,6 +9,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Browser origins allowed to call the API. Local dev servers on any port are also allowed
+# (see `allowed_origin_regex`); ALLOWED_ORIGINS can add more without a code change.
+CORS_ORIGINS = [
+    "https://sql-agent-frontend-delta.vercel.app",
+    "http://localhost:5173",
+]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
@@ -22,7 +29,7 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("GOOGLE_API_KEY", "GEMINI_API_KEY")
     )
 
-    allowed_origins: str = "http://localhost:5173"
+    allowed_origins: str = ""  # optional extra origins, comma-separated
     # Local dev servers on any port (Vite moves to 5174, 5175... when 5173 is busy).
     allowed_origin_regex: str = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
     checkpoint_db: str = "data/checkpoints.db"
@@ -48,7 +55,8 @@ class Settings(BaseSettings):
 
     @property
     def origins(self) -> list[str]:
-        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+        extra = [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]
+        return list(dict.fromkeys(CORS_ORIGINS + extra))
 
 
 def _resolve(path: str) -> Path:
