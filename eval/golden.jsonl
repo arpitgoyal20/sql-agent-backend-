@@ -1,0 +1,25 @@
+{"question": "Show all employees hired after January 2024", "expected_sql": "SELECT EmployeeID, FirstName, LastName, HireDate FROM Employees WHERE HireDate >= '2024-01-01'"}
+{"question": "How many customers are there in each state?", "expected_sql": "SELECT State, COUNT(*) AS CustomerCount FROM Customers GROUP BY State"}
+{"question": "List all customers from California", "expected_sql": "SELECT CustomerID, Name, City FROM Customers WHERE State = 'California'"}
+{"question": "What is the average salary in each department? Show the department name.", "expected_sql": "SELECT d.Name, AVG(e.Salary) AS AvgSalary FROM Employees e JOIN Departments d ON d.DepartmentID = e.DepartmentID GROUP BY d.DepartmentID, d.Name"}
+{"question": "Top 5 customers by total order value", "expected_sql": "SELECT c.CustomerID, c.Name, SUM(oi.Quantity * oi.UnitPrice) AS TotalValue FROM Customers c JOIN Orders o ON o.CustomerID = c.CustomerID JOIN OrderItems oi ON oi.OrderID = o.OrderID GROUP BY c.CustomerID, c.Name ORDER BY TotalValue DESC LIMIT 5"}
+{"question": "How many orders have each status?", "expected_sql": "SELECT Status, COUNT(*) AS OrderCount FROM Orders GROUP BY Status"}
+{"question": "List the 3 most expensive products", "expected_sql": "SELECT ProductID, Name, Price FROM Products ORDER BY Price DESC LIMIT 3"}
+{"question": "How many orders were placed in 2024?", "expected_sql": "SELECT COUNT(*) AS OrderCount FROM Orders WHERE OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01'"}
+{"question": "Which employees have no manager?", "expected_sql": "SELECT EmployeeID, FirstName, LastName FROM Employees WHERE ManagerID IS NULL"}
+{"question": "Show each employee's name with their manager's name", "expected_sql": "SELECT e.FirstName, e.LastName, m.FirstName AS ManagerFirstName, m.LastName AS ManagerLastName FROM Employees e LEFT JOIN Employees m ON m.EmployeeID = e.ManagerID"}
+{"question": "Total payment amount by payment method", "expected_sql": "SELECT Method, SUM(Amount) AS Total FROM Payments GROUP BY Method"}
+{"question": "How many products are in each category?", "expected_sql": "SELECT Category, COUNT(*) AS ProductCount FROM Products GROUP BY Category"}
+{"question": "Which departments have more than 25 employees?", "expected_sql": "SELECT d.Name, COUNT(*) AS EmployeeCount FROM Employees e JOIN Departments d ON d.DepartmentID = e.DepartmentID GROUP BY d.DepartmentID, d.Name HAVING COUNT(*) > 25"}
+{"question": "How many orders were cancelled?", "expected_sql": "SELECT COUNT(*) AS CancelledOrders FROM Orders WHERE Status = 'cancelled'"}
+{"question": "Which customers have never placed an order?", "expected_sql": "SELECT CustomerID, Name FROM Customers WHERE CustomerID NOT IN (SELECT CustomerID FROM Orders)"}
+{"question": "Total revenue per product category, highest first", "expected_sql": "SELECT p.Category, SUM(oi.Quantity * oi.UnitPrice) AS Revenue FROM OrderItems oi JOIN Products p ON p.ProductID = oi.ProductID GROUP BY p.Category ORDER BY Revenue DESC"}
+{"question": "What is the highest salary in the company?", "expected_sql": "SELECT MAX(Salary) AS MaxSalary FROM Employees"}
+{"question": "Which sales rep handled the most orders?", "expected_sql": "SELECT e.EmployeeID, e.FirstName, e.LastName, COUNT(*) AS OrderCount FROM Orders o JOIN Employees e ON e.EmployeeID = o.EmployeeID GROUP BY e.EmployeeID, e.FirstName, e.LastName ORDER BY OrderCount DESC LIMIT 1"}
+{"question": "How many customers signed up in 2025?", "expected_sql": "SELECT COUNT(*) AS Signups FROM Customers WHERE SignupDate >= '2025-01-01' AND SignupDate < '2026-01-01'"}
+{"question": "List the departments located in New York", "expected_sql": "SELECT DepartmentID, Name FROM Departments WHERE Location = 'New York'"}
+{"question": "Number of orders per month in 2025", "expected_sql": "SELECT strftime('%Y-%m', OrderDate) AS Month, COUNT(*) AS OrderCount FROM Orders WHERE OrderDate >= '2025-01-01' AND OrderDate < '2026-01-01' GROUP BY Month ORDER BY Month"}
+{"question": "List products priced above 200, cheapest first", "expected_sql": "SELECT ProductID, Name, Price FROM Products WHERE Price > 200 ORDER BY Price"}
+{"question": "What is the average order value of delivered orders?", "expected_sql": "SELECT AVG(OrderTotal) AS AvgOrderValue FROM (SELECT o.OrderID, SUM(oi.Quantity * oi.UnitPrice) AS OrderTotal FROM Orders o JOIN OrderItems oi ON oi.OrderID = o.OrderID WHERE o.Status = 'delivered' GROUP BY o.OrderID)"}
+{"question": "List employees in the Engineering department earning more than 100000", "expected_sql": "SELECT e.EmployeeID, e.FirstName, e.LastName, e.Salary FROM Employees e JOIN Departments d ON d.DepartmentID = e.DepartmentID WHERE d.Name = 'Engineering' AND e.Salary > 100000"}
+{"question": "How many orders did customers from Texas place?", "expected_sql": "SELECT COUNT(*) AS OrderCount FROM Orders o JOIN Customers c ON c.CustomerID = o.CustomerID WHERE c.State = 'Texas'"}

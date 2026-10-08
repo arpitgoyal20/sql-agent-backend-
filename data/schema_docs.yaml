@@ -1,0 +1,37 @@
+# One line per column: "Table.Column: description". Appended to prompts as SQL comments.
+Departments.DepartmentID: department primary key
+Departments.Name: department name, e.g. 'Engineering', 'Sales'
+Departments.Location: office city where the department sits
+Employees.EmployeeID: employee primary key
+Employees.FirstName: employee given name
+Employees.LastName: employee family name
+Employees.Email: employee work email, unique
+Employees.HireDate: date the employee joined, ISO 'YYYY-MM-DD' text
+Employees.Salary: annual salary in USD
+Employees.DepartmentID: department the employee belongs to
+Employees.ManagerID: the employee's manager (another EmployeeID); NULL for top-level staff
+Customers.CustomerID: customer primary key
+Customers.Name: customer full name
+Customers.Email: customer contact email
+Customers.City: customer city
+Customers.State: full US state name, e.g. 'California' (never abbreviations)
+Customers.SignupDate: date the customer registered, ISO 'YYYY-MM-DD' text
+Products.ProductID: product primary key
+Products.Name: product name
+Products.Category: product category, e.g. 'Electronics', 'Books'
+Products.Price: current list price in USD
+Orders.OrderID: order primary key
+Orders.CustomerID: customer who placed the order
+Orders.EmployeeID: sales rep who handled the order
+Orders.OrderDate: date the order was placed, ISO 'YYYY-MM-DD' text
+Orders.Status: order lifecycle; one of 'pending','shipped','delivered','cancelled'; 'delivered' means completed
+OrderItems.OrderItemID: order line primary key
+OrderItems.OrderID: order this line belongs to
+OrderItems.ProductID: product on this line
+OrderItems.Quantity: units ordered on this line
+OrderItems.UnitPrice: price per unit at time of order; line value = Quantity * UnitPrice
+Payments.PaymentID: payment primary key
+Payments.OrderID: order this payment settles
+Payments.Amount: amount paid in USD
+Payments.Method: payment method; one of 'card','upi','bank_transfer','cash'
+Payments.PaidAt: date the payment was made, ISO 'YYYY-MM-DD' text

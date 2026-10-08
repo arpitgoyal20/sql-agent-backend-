@@ -1,0 +1,57 @@
+# NL -> SQL examples over the real schema. tests/test_prompts.py validates and runs each one.
+- question: Show all employees hired after January 2024
+  sql: |
+    SELECT EmployeeID, FirstName, LastName, HireDate
+    FROM Employees
+    WHERE HireDate >= '2024-01-01'
+    ORDER BY HireDate
+
+- question: How many orders were placed between March and May 2025?
+  sql: |
+    SELECT COUNT(*) AS OrderCount
+    FROM Orders
+    WHERE OrderDate BETWEEN '2025-03-01' AND '2025-05-31'
+
+- question: List each employee with their department name
+  sql: |
+    SELECT e.FirstName, e.LastName, d.Name AS DepartmentName
+    FROM Employees AS e
+    JOIN Departments AS d ON d.DepartmentID = e.DepartmentID
+
+- question: Total revenue per customer
+  sql: |
+    SELECT c.CustomerID, c.Name, SUM(oi.Quantity * oi.UnitPrice) AS Revenue
+    FROM Customers AS c
+    JOIN Orders AS o ON o.CustomerID = c.CustomerID
+    JOIN OrderItems AS oi ON oi.OrderID = o.OrderID
+    GROUP BY c.CustomerID, c.Name
+    ORDER BY Revenue DESC
+
+- question: Which product categories have more than 8 products?
+  sql: |
+    SELECT Category, COUNT(*) AS ProductCount
+    FROM Products
+    GROUP BY Category
+    HAVING COUNT(*) > 8
+
+- question: Top 5 most expensive products
+  sql: |
+    SELECT ProductID, Name, Price
+    FROM Products
+    ORDER BY Price DESC
+    LIMIT 5
+
+- question: Show each employee with their manager's name
+  sql: |
+    SELECT e.FirstName, e.LastName, m.FirstName AS ManagerFirstName, m.LastName AS ManagerLastName
+    FROM Employees AS e
+    LEFT JOIN Employees AS m ON m.EmployeeID = e.ManagerID
+
+- question: Only those from California
+  previous_sql: |
+    SELECT CustomerID, Name, City, State
+    FROM Customers
+  sql: |
+    SELECT CustomerID, Name, City, State
+    FROM Customers
+    WHERE State = 'California'
