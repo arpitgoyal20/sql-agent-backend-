@@ -243,3 +243,4 @@ def test_saved_queries_crud(client):
     assert client.post("/api/saved", json={**item, "sql": "DROP TABLE Orders"}).status_code == 422
     assert client.delete(f"/api/saved/{saved['id']}").status_code == 204
     assert client.get("/api/saved").json() == []
+

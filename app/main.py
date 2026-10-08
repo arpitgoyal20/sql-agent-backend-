@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -135,8 +136,11 @@ async def lifespan(app: FastAPI):
         app.state.db = conn
         app.state.saver = saver
         app.state.graph = compile_graph(saver)
+        app.state.turns = set()  # running chat turns (kept referenced until they finish)
         get_schema()  # load once at startup
         yield
+        if app.state.turns:  # let in-flight turns finish saving before the DB closes
+            await asyncio.wait(app.state.turns, timeout=30)
 
 
 def create_app() -> FastAPI:
@@ -298,22 +302,38 @@ def create_app() -> FastAPI:
         )
         await db.commit()
 
+        # The turn runs as its own task so it finishes and is saved even if the client
+        # disconnects (page reload, closed tab); the SSE response only relays its events.
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def run() -> None:
+            try:
+                async for event, data in run_turn(
+                    request.app.state.graph,
+                    thread_id=body.thread_id,
+                    message=body.message,
+                    dialect=body.dialect,
+                    execute=body.execute,
+                ):
+                    if event == "done":
+                        await db.execute(
+                            "UPDATE threads SET updated_at = ? WHERE thread_id = ?",
+                            (_now(), body.thread_id),
+                        )
+                        if is_new:
+                            await _apply_generated_title(request.app, body.thread_id)
+                        await db.commit()
+                    await queue.put((event, data))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run())
+        request.app.state.turns.add(task)
+        task.add_done_callback(request.app.state.turns.discard)
+
         async def events():
-            async for event, data in run_turn(
-                request.app.state.graph,
-                thread_id=body.thread_id,
-                message=body.message,
-                dialect=body.dialect,
-                execute=body.execute,
-            ):
-                if event == "done":
-                    await db.execute(
-                        "UPDATE threads SET updated_at = ? WHERE thread_id = ?",
-                        (_now(), body.thread_id),
-                    )
-                    if is_new:
-                        await _apply_generated_title(request.app, body.thread_id)
-                    await db.commit()
+            while (item := await queue.get()) is not None:
+                event, data = item
                 yield {"event": event, "data": json.dumps(data, default=str)}
 
         return EventSourceResponse(events(), ping=15)
