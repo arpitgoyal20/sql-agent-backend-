@@ -72,3 +72,14 @@ def test_extract_sql(text, expected):
 def test_strip_code_fence():
     assert guard.strip_code_fence("```sql\nSELECT 1\n```") == "SELECT 1"
     assert guard.strip_code_fence("SELECT 1") == "SELECT 1"
+
+
+
+def test_strip_preview_limit():
+    from app.nodes.guard_input import strip_preview_limit
+
+    assert strip_preview_limit("SELECT *\nFROM Customers\nLIMIT 100;", "sqlite") == "SELECT * FROM Customers"
+    assert strip_preview_limit("SELECT * FROM Customers LIMIT 100 OFFSET 0", "sqlite") == "SELECT * FROM Customers"
+    # Anything that is not the preview default is the user's own limit and stays.
+    assert strip_preview_limit("SELECT Name FROM Products LIMIT 5;", "sqlite") == "SELECT Name FROM Products LIMIT 5"
+    assert "OFFSET 200" in strip_preview_limit("SELECT * FROM Orders LIMIT 100 OFFSET 200", "sqlite")

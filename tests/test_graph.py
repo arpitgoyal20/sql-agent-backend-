@@ -328,3 +328,148 @@ async def test_llm_failure_becomes_error_then_done(fake, graph):
     events, _, _ = await turn(graph, "Show all customers")
     assert names(events)[-2:] == ["error", "done"]
     assert "Please try again" in first(events, "error")["text"]
+
+
+# ---- workbench: the editor's query drives follow-ups (CHANGES-v2 §3.1) ----------------------
+
+
+async def test_current_sql_from_editor_is_modified_without_preview_limit(fake, graph):
+    fake.script = {
+        "IntentDecision": [intent("modify", refers=True)],
+        "SqlDraft": [
+            {"sql": "SELECT * FROM Customers WHERE State = 'California'", "assumptions": []}
+        ],
+        "text": [EXPLAIN_TEXT],
+    }
+    events, state, _ = await turn(
+        graph,
+        "only those from California",
+        current_sql="SELECT *\nFROM Customers\nLIMIT 100;",
+    )
+    generator_prompt = [p for k, p in fake.calls if k == "SqlDraft"][0]
+    assert "PREVIOUS SQL: SELECT * FROM Customers\n" in generator_prompt
+    assert "LIMIT 100" not in generator_prompt
+    classifier_prompt = [p for k, p in fake.calls if k == "IntentDecision"][0]
+    assert "Previous SQL: SELECT * FROM Customers\n" in classifier_prompt
+    sql = first(events, "sql")["sql"]
+    assert "State = 'California'" in sql and "LIMIT" not in sql
+    result = first(events, "result")
+    assert result["total"] == 98 and result["limit"] == 100 and result["offset"] == 0
+
+
+async def test_invalid_current_sql_is_ignored(fake, graph):
+    fake.script = {
+        "IntentDecision": [intent("generate")],
+        "SqlDraft": [{"sql": "SELECT Name FROM Products", "assumptions": []}],
+        "text": [EXPLAIN_TEXT],
+    }
+    _, state, _ = await turn(graph, "product names", current_sql="SELECT nope FROM Nowhere")
+    assert "nope" not in [p for k, p in fake.calls if k == "IntentDecision"][0]
+    assert state["last_sql"] == "SELECT Name FROM Products"
+
+
+async def test_destructive_current_sql_is_never_adopted(fake, graph):
+    fake.script = {"IntentDecision": [intent("out_of_scope")]}
+    _, state, _ = await turn(graph, "hello", current_sql="DELETE FROM Orders")
+    assert not state.get("last_sql")
+
+
+async def test_chat_result_is_first_page_with_total(fake, graph):
+    fake.script = {
+        "IntentDecision": [intent("generate")],
+        "SqlDraft": [{"sql": "SELECT OrderID FROM Orders", "assumptions": []}],
+        "text": [EXPLAIN_TEXT],
+    }
+    events, _, _ = await turn(graph, "all orders")
+    result = first(events, "result")
+    assert result["row_count"] == 100 and result["total"] == 2000
+    assert result["truncated"] is True and result["limit"] == 100 and result["offset"] == 0
+    explainer_prompt = [p for k, p in fake.calls if k == "text"][0]
+    assert "Rows returned: 2000" in explainer_prompt
+
+
+@pytest.mark.parametrize(
+    "message, mode",
+    [
+        ("Explain this query:\n```sql\nSELECT Name FROM Products\n```", "explain"),
+        ("Optimize this query:\n```sql\nSELECT Name FROM Products\n```", "optimize"),
+        (
+            "Fix this query:\n```sql\nSELECT nope FROM Products\n```\nError: UNKNOWN_COLUMN: x",
+            "debug",
+        ),
+    ],
+)
+async def test_editor_button_messages(fake, graph, message, mode):
+    # The LLM returns no user_sql, so code must extract it from the fence (not the Error line).
+    fake.script = {
+        "IntentDecision": [intent(mode)],
+        "RewriteDraft": [{"sql": "SELECT Name FROM Products"}],
+        "text": [EXPLAIN_TEXT],
+    }
+    _, state, _ = await turn(graph, message)
+    assert state["user_sql"] in ("SELECT Name FROM Products", "SELECT nope FROM Products")
+    assert "Error" not in state["user_sql"]
+    assert state["final_sql"] == "SELECT Name FROM Products"
+
+
+# ---- non-SQLite dialects run on the demo database via translation --------------------------
+
+
+def _script(fake, sql):
+    fake.script = {
+        "IntentDecision": [intent("generate")],
+        "SqlDraft": [{"sql": sql, "assumptions": []}],
+        "text": [EXPLAIN_TEXT],
+    }
+
+
+async def test_postgres_ilike_and_quoted_identifiers_run_through_chat(fake, graph):
+    _script(fake, 'SELECT "FirstName", "LastName" FROM "Employees" WHERE "FirstName" ILIKE \'a%\'')
+    events, _, _ = await turn(graph, "employees whose first name starts with a", dialect="postgres", execute=True)
+    sql = first(events, "sql")
+    assert sql["dialect"] == "postgres" and '"FirstName"' in sql["sql"]
+    assert sql["executed_sql"] and "ILIKE" not in sql["executed_sql"].upper()
+    result = first(events, "result")
+    assert "error" not in result
+    assert result["row_count"] > 0
+    assert all(row[0].lower().startswith("a") for row in result["rows"])
+
+
+async def test_mysql_backtick_identifiers_run_through_chat(fake, graph):
+    _script(fake, "SELECT `Name`, `Price` FROM `Products` ORDER BY `Price` DESC LIMIT 3")
+    events, _, _ = await turn(graph, "three most expensive products", dialect="mysql", execute=True)
+    sql = first(events, "sql")
+    assert sql["dialect"] == "mysql" and "`Products`" in sql["sql"]
+    assert "`" not in sql["executed_sql"]
+    result = first(events, "result")
+    assert result["row_count"] == 3 and result["columns"] == ["Name", "Price"]
+
+
+async def test_postgres_feature_sqlite_lacks_keeps_sql_and_reports(fake, graph):
+    _script(fake, "SELECT ARRAY_AGG(FirstName) AS names FROM Employees")
+    events, state, _ = await turn(graph, "all first names as an array", dialect="postgres", execute=True)
+    # The SQL is valid PostgreSQL: it is still returned (for the editor) and never retried.
+    assert "ARRAY_AGG" in first(events, "sql")["sql"]
+    assert fake.kinds().count("SqlDraft") == 1
+    result = first(events, "result")
+    assert result["rows"] == [] and result["error"].startswith(
+        "This PostgreSQL feature isn't supported on the SQLite demo database."
+    )
+    assert ("step", {"node": "execute_sql", "status": "skip", "label": "Running query"}) in events
+    assert "explanation" in names(events)
+    assert state["last_sql"] == "SELECT ARRAY_AGG(FirstName) AS names FROM Employees"
+
+
+async def test_sqlite_runtime_errors_still_retry(fake, graph):
+    # Same kind of failure in the SQLite dialect is the model's mistake: it is retried.
+    fake.script = {
+        "IntentDecision": [intent("generate")],
+        "SqlDraft": [
+            {"sql": "SELECT ARRAY_AGG(FirstName) FROM Employees", "assumptions": []},
+            {"sql": "SELECT GROUP_CONCAT(FirstName) FROM Employees", "assumptions": []},
+        ],
+        "text": [EXPLAIN_TEXT],
+    }
+    events, _, _ = await turn(graph, "all first names", dialect="sqlite", execute=True)
+    assert fake.kinds().count("SqlDraft") == 2
+    assert first(events, "result")["row_count"] == 1

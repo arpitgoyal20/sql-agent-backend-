@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessageChunk
 from app.graph import STEP_LABELS, route_after_execute, route_after_validate
 from app.nodes.common import message_text
 from app.nodes.explain_sql import ASSUMPTIONS_MARKER
+from app.dialects import executed_sql
 from app.inspector import checklist, inspect
 from app.schema_loader import get_schema
 from app.validator import transpile
@@ -90,7 +91,7 @@ def _finish_status(node: str, state: dict) -> str:
     if node == "execute_sql":
         if state.get("execution_error"):
             return "retry" if route_after_execute(state) != "explain_sql" else "ok"
-        return "ok" if state.get("executed") else "skip"
+        return "ok" if state.get("executed") else "skip"  # notice: shown in the result event
     return "ok"
 
 
@@ -117,6 +118,18 @@ def _events_for_update(node: str, state: dict, update: dict, tokens: TokenFilter
                     "original_sql": (
                         state.get("user_sql") if state.get("intent") in ("optimize", "debug") else None
                     ),
+                    "executed_sql": executed_sql(state.get("exec_sql"), dialect),
+                },
+            )
+        )
+    if node == "execute_sql" and update.get("execution_notice"):
+        events.append(
+            (
+                "result",
+                {
+                    "columns": [], "rows": [], "row_count": 0, "truncated": False,
+                    "total": 0, "limit": 0, "offset": 0,
+                    "error": update["execution_notice"],
                 },
             )
         )
@@ -129,6 +142,9 @@ def _events_for_update(node: str, state: dict, update: dict, tokens: TokenFilter
                     "rows": state.get("result_rows") or [],
                     "row_count": state.get("row_count", 0),
                     "truncated": bool(state.get("truncated")),
+                    "total": state.get("result_total", state.get("row_count", 0)),
+                    "limit": state.get("result_limit") or state.get("row_count", 0),
+                    "offset": 0,
                 },
             )
         )
@@ -161,10 +177,11 @@ async def run_turn(
     message: str,
     dialect: str = "sqlite",
     execute: bool = True,
+    current_sql: str | None = None,
 ) -> AsyncIterator[Event]:
     """Yield (event, data) pairs for one turn. Always ends with `done`; never raises."""
     config = {"configurable": {"thread_id": thread_id}}
-    inputs = {"user_input": message, "dialect": dialect, "execute": execute}
+    inputs = {"user_input": message, "dialect": dialect, "execute": execute, "current_sql": current_sql}
     state: dict[str, Any] = {"dialect": dialect, "execute": execute}
     tokens = TokenFilter()
 

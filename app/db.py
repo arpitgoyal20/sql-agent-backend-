@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,17 @@ class QueryResult:
     rows: list[list[Any]]
     row_count: int
     truncated: bool
+
+
+@dataclass
+class PageResult:
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int  # rows on this page
+    total: int  # rows the whole query returns
+    limit: int
+    offset: int
+    elapsed_ms: int
 
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
@@ -112,5 +124,66 @@ def explain_query_plan(sql: str, *, db_path: Path | str | None = None) -> None:
     try:
         _install_timeout(conn, get_settings().query_timeout_s)
         conn.execute(f"EXPLAIN QUERY PLAN {sql}").fetchall()
+    finally:
+        conn.close()
+
+
+def _strip_terminator(sql: str) -> str:
+    return sql.strip().rstrip(";").strip()
+
+
+def execute_page(
+    sql: str,
+    *,
+    limit: int,
+    offset: int = 0,
+    db_path: Path | str | None = None,
+    timeout_s: float | None = None,
+) -> PageResult:
+    """Run one page of a validated SQLite SELECT and count its total rows.
+
+    The query is wrapped as a subquery (`SELECT * FROM (<sql>) AS q LIMIT ? OFFSET ?`), so a
+    LIMIT inside it is respected. The newlines keep a trailing `-- comment` from swallowing
+    the closing parenthesis. One timeout covers both statements.
+    """
+    timeout = timeout_s if timeout_s is not None else get_settings().query_timeout_s
+    inner = _strip_terminator(sql)
+    started = time.monotonic()
+    conn = connect(db_path)
+    try:
+        _install_timeout(conn, timeout)
+        try:
+            cur = conn.execute(f"SELECT * FROM (\n{inner}\n) AS q LIMIT ? OFFSET ?", (limit, offset))
+            rows = cur.fetchall()
+            columns = [d[0] for d in cur.description or []]
+            total = conn.execute(f"SELECT COUNT(*) FROM (\n{inner}\n) AS q").fetchone()[0]
+        except sqlite3.OperationalError as e:
+            if "interrupted" in str(e).lower():
+                raise QueryTimeout(f"query exceeded the {timeout:g}s timeout") from e
+            raise
+    finally:
+        conn.close()
+    return PageResult(
+        columns=columns,
+        rows=[list(r) for r in rows],
+        row_count=len(rows),
+        total=total,
+        limit=limit,
+        offset=offset,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+@lru_cache
+def row_counts() -> dict[str, int]:
+    """Rows per table, computed once: the database is read-only so they never change."""
+    from app.schema_loader import get_schema
+
+    conn = connect()
+    try:
+        return {
+            t: conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+            for t in get_schema().table_names
+        }
     finally:
         conn.close()

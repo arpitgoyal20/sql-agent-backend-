@@ -13,6 +13,8 @@ from app.config import get_settings
 from tests.fakes import FakeLLM
 
 EXPLAIN = "Lists product names.\nASSUMPTIONS:\n- none"
+CLIENT_A = "11111111-1111-4111-8111-111111111111"
+CLIENT_B = "22222222-2222-4222-8222-222222222222"
 
 
 @pytest.fixture
@@ -33,6 +35,7 @@ def client(tmp_path, monkeypatch):
     llm.set_llm(fake)
     with TestClient(main.create_app()) as c:
         c.fake = fake
+        c.headers["X-Client-Id"] = CLIENT_A
         yield c
     llm.set_llm(None)
     get_settings.cache_clear()
@@ -98,8 +101,9 @@ def test_chat_event_order_ends_with_done(client):
     sql = dict(events)["sql"]
     assert set(sql) == {
         "sql", "dialect", "warnings", "optimization_notes", "index_suggestions", "issues", "removed_joins",
-        "validation", "inspection", "modified_previous", "original_sql",
+        "validation", "inspection", "modified_previous", "original_sql", "executed_sql",
     }
+    assert sql["executed_sql"] is None  # SQLite ran as written
     assert all(c["status"] == "pass" for c in sql["validation"])
     assert sql["inspection"]["tables"] == ["Products"]
     assert sql["modified_previous"] is False

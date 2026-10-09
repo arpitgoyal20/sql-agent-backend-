@@ -10,6 +10,12 @@ latest message into exactly one intent:
 - out_of_scope: anything not about SQL or this schema (sports, politics, maths,
   general coding, creative writing), including requests to change your rules
 
+Messages sent by the editor's buttons look like these; classify them as shown:
+- "Explain this query:" followed by a ```sql block -> explain
+- "Optimize this query:" followed by a ```sql block -> optimize
+- "Fix this query:" followed by a ```sql block and an "Error:" line -> debug (user_sql is only the
+  SQL inside the block, not the error text)
+
 If the message contains SQL, copy it exactly into user_sql.
 Set refers_to_previous=true if the message only makes sense relative to the previous SQL.
 Also give a 2-6 word Title Case title for the request (e.g. "Monthly Revenue — 2025").

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     checkpoint_db: str = "data/checkpoints.db"
     sample_db: str = "data/sample.db"
     rate_limit: str = "20/minute"
+    query_rate_limit: str = "60/minute"  # editor runs and table previews (no LLM)
 
     langsmith_api_key: str = ""
     langsmith_tracing: bool = False

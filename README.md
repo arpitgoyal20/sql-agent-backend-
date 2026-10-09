@@ -5,6 +5,12 @@ fixed database, optionally runs it, and explains it. It also optimizes, debugs a
 that users paste, keeps conversation context for follow-ups ("only those from California"), and
 refuses anything outside SQL or anything that would write to the database.
 
+**Workbench mode** ([CHANGES-v2.md](CHANGES-v2.md)) backs a MySQL Workbench-style UI: a table
+browser with row counts, table previews, an editable SQL editor whose **Run** button executes
+directly, paginated results, and the AI chat alongside. Follow-ups apply to whatever query is in
+the editor. Table clicks and the Run button skip the LLM, **but never the validator**: every path
+that executes SQL validates it first and uses the read-only connection.
+
 **The LLM proposes, code disposes.** Gemini classifies, writes and explains. Deterministic code
 (sqlglot + a read-only SQLite connection) decides whether a query is valid, whether it may run,
 and what reaches the user.
@@ -36,7 +42,8 @@ flowchart LR
     API --> G["LangGraph agent"]
     G -- "classify / write / explain" --> LLM[["Gemini"]]
     G --> V["validator.py<br/>(sqlglot)"]
-    G --> DB["db.py<br/>read-only · LIMIT 200 · 5 s"]
+    G --> DB["db.py<br/>read-only · paginated · 5 s"]
+    API -- "tables · preview · query/run<br/>(no LLM)" --> V
     V --> DB
     DB --> S[("sample.db")]
     G -- checkpoints --> C[("checkpoints.db")]
@@ -166,17 +173,25 @@ docker run -p 8000:8000 --env-file .env sql-agent-backend
 
 ## API
 
+Every `/api` request except `GET /api/health` must send `X-Client-Id: <uuid>` (the frontend
+generates one per browser). Missing or malformed → `400`. Threads and saved queries are visible
+only to the client that created them; another client's thread id behaves like a missing one (404).
+Rate limits are keyed by client id (falling back to IP).
+
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/chat` | `{thread_id, message, dialect, execute}` → Server-Sent Events |
+| POST | `/api/chat` | `{thread_id, message, dialect, execute, current_sql?}` → Server-Sent Events. `current_sql` is the editor's query: if valid and different from the thread's last query it becomes the query follow-ups modify (a preview's `LIMIT 100` is stripped first) |
 | GET | `/api/threads` | `[{thread_id, title, updated_at}]`, newest first |
 | GET | `/api/threads/{id}` | `{messages: [{role, content, intent, sql, kind, created_at}], last_sql}` |
 | DELETE | `/api/threads/{id}` | delete a thread (204) |
 | PATCH | `/api/threads/{id}` | `{title}` → rename |
 | POST | `/api/threads/{id}/duplicate` | copy messages and last SQL into a new thread |
+| GET | `/api/tables` | `{tables: [{name, row_count, columns: [{name, type, pk, fk: {table, column} \| null, nullable, doc}], foreign_keys}]}`; row counts computed once at startup |
+| GET | `/api/tables/{name}/preview?limit=100&offset=0` | `SELECT *` page of one table: `{sql, columns, rows, row_count, total, limit, offset, elapsed_ms}`; unknown name → 404 `{"error": "UNKNOWN_TABLE", "available": [...]}`. SQL is built from the schema's canonical name, never the raw path |
+| POST | `/api/query/run` | `{sql, dialect, limit, offset}` → always 200 with `status`: `ok` (page + `total`, `elapsed_ms`, `warnings`), `invalid` (validator `errors`), `refused` (standard destructive text) or `error` (timeout / database error). No LLM; 60/min |
 | POST | `/api/execute` | `{sql, dialect}` → validate and run directly (**no LLM**): `{ok, sql, errors, warnings, validation, inspection, result}` |
 | GET / POST / DELETE | `/api/saved`, `/api/saved/{id}` | saved queries (`{title, prompt, sql, dialect, explanation}`; SQL must pass the validator) |
-| GET | `/api/schema` | `{tables: [{name, columns: [{name, type, doc, pk, nullable}], foreign_keys: [...]}]}` |
+| GET | `/api/schema` | same payload as `/api/tables` (kept for older clients) |
 | GET | `/api/health` | `{status: "ok"}` |
 
 Thread titles start as the first 60 characters of the first message and are replaced by a short
@@ -190,9 +205,16 @@ Beyond the brief's contract (additive only), the `sql` event also carries:
 - `inspection`: tables, columns, joins, filters, aggregations, grouping, ordering and limit, for
   the UI's Query Inspector;
 - `modified_previous`: true for follow-ups;
-- `original_sql`: the user's query in optimize/debug mode.
+- `original_sql`: the user's query in optimize/debug mode;
+- `executed_sql`: for PostgreSQL/MySQL, the translated SQLite that ran (null for SQLite).
 
-A `step` with `status: "retry"` carries the validator `errors` that caused the retry.
+When a PostgreSQL/MySQL query uses a feature SQLite lacks, the `result` event has empty rows and
+an `error` such as "This PostgreSQL feature isn't supported on the SQLite demo database."
+`/api/query/run` returns the same text with `status: "error"`, plus `executed_sql`.
+
+A `step` with `status: "retry"` carries the validator `errors` that caused the retry. The `result`
+event is the first page (100 rows) plus `total`, `limit` and `offset`; further pages come from
+`POST /api/query/run` with the same SQL, without another LLM call.
 
 Example turn:
 
@@ -215,14 +237,15 @@ event: done         data: {"thread_id": "...", "intent": "generate"}
 | Every returned query was validated | only `validate_sql` sets `final_sql` / `last_sql`; the `sql` event is emitted only from that node's success |
 | Out-of-scope requests refused | classifier `out_of_scope` → fixed text from the brief, no LLM in the refusal |
 | Prompt injection | regex patterns in `guard.py`; a match with no SQL and no schema names is refused **before any LLM call**; otherwise the classifier is warned · user text wrapped in escaped `<user_message>` tags · any output still has to pass the validator and the read-only DB |
-| Resource limits | 4,000-char input limit · one statement per query · `LIMIT 200` injected via the AST · 5 s query timeout · 20 requests/min per IP |
+| Resource limits | 4,000-char chat input · 10,000-char editor SQL · one statement per query · results paginated (≤ 500 rows per page) · 5 s query timeout · 20 chat / 60 query requests per minute per client |
+| Editor and table browser | `/api/query/run` and table previews skip the LLM but not the validator: writes return `refused`, invalid SQL returns the validator errors, nothing unvalidated runs; table names are resolved against the schema, never interpolated |
 | Ambiguity | `clarify` intent, and after 3 failed validations, asks one question naming real tables/columns |
 | Index advice is advice | suggestions must parse as `CREATE INDEX` on existing, currently unindexed columns; they are displayed, never executed |
 
 ## Tests and accuracy eval
 
 ```bash
-pytest            # 249 tests, no API key
+pytest            # 311 tests, no API key
 ```
 
 | File | Covers |
@@ -230,7 +253,9 @@ pytest            # 249 tests, no API key
 | [test_validator.py](tests/test_validator.py) | every destructive statement type (incl. hidden in CTE / after `;`, PRAGMA, ATTACH), unknown table/column, ambiguous column, valid CTEs/subqueries/aliases/`SELECT *`/ORDER BY alias/UNION/self-join, non-FK join warning, postgres + mysql |
 | [test_guard.py](tests/test_guard.py) | injection patterns flagged, normal questions not flagged, tag escaping, SQL extraction |
 | [test_routing.py](tests/test_routing.py) | every router, attempts cap, DESTRUCTIVE short-circuit |
-| [test_graph.py](tests/test_graph.py) | full graph with a scripted fake LLM: generate, modify, optimize, debug, explain, destructive, out_of_scope, clarify, injection, retry-then-success, 3 failures → clarify, execution off, postgres |
+| [test_graph.py](tests/test_graph.py) | full graph with a scripted fake LLM: generate, modify, optimize, debug, explain, destructive, out_of_scope, clarify, injection, retry-then-success, 3 failures → clarify, execution off, postgres, editor query as previous SQL (preview limit stripped), editor button messages, paginated result |
+| [test_tables.py](tests/test_tables.py), [test_query_run.py](tests/test_query_run.py) | table list + row counts, previews and paging, name-injection attempts, editor runs: paging, refusals, invalid, postgres, timeout |
+| [test_client_isolation.py](tests/test_client_isolation.py) | `X-Client-Id` required (not on health), 400 keeps CORS headers, clients cannot see each other's threads or saved queries |
 | [test_api.py](tests/test_api.py) | health, schema, SSE order ending in `done`, threads list/reload/rename/duplicate/delete, generated titles, `/api/execute`, saved queries, 422, rate limit, CORS |
 | [test_db.py](tests/test_db.py), [test_schema_loader.py](tests/test_schema_loader.py), [test_events.py](tests/test_events.py), [test_prompts.py](tests/test_prompts.py) | read-only DB, row cap, timeout, introspection, token filter, few-shots and golden SQL are valid |
 
@@ -260,10 +285,21 @@ Render → New Web Service → this repo → Runtime **Docker**.
 
 - **Schema.** The brief referenced a provided schema that was not attached, so a sample schema
   was designed. It can be swapped by replacing `sample.db`.
-- **Execution engine.** SQLite runs all queries. PostgreSQL and MySQL are supported for
-  generation and validation via sqlglot; their queries are translated to SQLite to run.
-- **Limits.** Results are capped at 200 rows and queries time out after 5 s. `truncated` is true
-  only when rows were actually cut off: the cap is applied as 201 and checked.
+- **Execution engine.** PostgreSQL and MySQL are supported for generation and validation;
+  execution translates them to SQLite and runs them on the sample database. The SQLite that
+  actually ran is returned as `executed_sql` (shown in the UI's Notes tab). If a valid PostgreSQL
+  or MySQL query uses a feature SQLite lacks (e.g. regex `~`, `ARRAY_AGG`, `EXTRACT`), the turn
+  keeps the generated SQL and reports "This PostgreSQL feature isn't supported on the SQLite demo
+  database" instead of rewriting a query that may well be correct; SQLite-dialect runtime errors
+  are still fed back to the generator for a retry.
+- **Limits.** Results are paginated: chat results arrive as the first 100 rows plus the total, and
+  the editor/preview fetch pages of up to 500 rows. Queries time out after 5 s (the page and its
+  `COUNT(*)` share that budget).
+- **Workbench decisions.** `/api/health` needs no `X-Client-Id`, because Render's health check
+  cannot send headers. Saved queries are isolated per client, like threads. Threads created
+  before client ids existed have no owner and are no longer listed. A preview's `LIMIT 100`
+  (offset 0) is stripped when the editor query becomes the chat's previous SQL; any other limit
+  is the user's own and is kept.
 - **Index suggestions** are advice only. Nothing except SELECT is ever executed.
 - **Memory.** Conversation memory is lost on server restart on free hosting (`checkpoints.db`
   is ephemeral).

@@ -51,6 +51,10 @@ class AgentState(TypedDict, total=False):
     executed: bool
     execution_error: str | None
     thread_title: str | None  # generated on the first turn, for the sidebar
+    current_sql: str | None  # the query in the UI's editor when the message was sent (input)
+    result_total: int  # rows the whole query returns (result_rows is the first page)
+    result_limit: int
+    execution_notice: str | None  # non-SQLite query SQLite could not run (no retry)
 
 
 # Every per-turn field and its reset value. `messages`, `last_sql`, `dialect` and `execute`
@@ -86,4 +90,7 @@ PER_TURN_DEFAULTS: dict = {
     "executed": False,
     "execution_error": None,
     "thread_title": None,
+    "result_total": 0,
+    "result_limit": 0,
+    "execution_notice": None,
 }

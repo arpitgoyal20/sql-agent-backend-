@@ -29,7 +29,9 @@ def split_explanation(text: str) -> tuple[str, list[str]]:
 async def explain_sql(state: AgentState) -> dict:
     intent = state.get("intent")
     if state.get("execute", True) and state.get("executed"):
-        rows = str(state.get("row_count", 0)) + (" (capped)" if state.get("truncated") else "")
+        rows = str(state.get("result_total") or state.get("row_count", 0))
+    elif state.get("execution_notice"):
+        rows = "not run: the SQLite demo database does not support a feature this query uses"
     else:
         rows = "not run"
     changes = (state.get("issues_found") or []) + (state.get("fixes") or [])
